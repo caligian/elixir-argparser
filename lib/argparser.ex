@@ -311,41 +311,22 @@ defmodule Argparser do
   end
 
   defp get_named_args([], map) do
-    List.foldl(Map.keys(map), %{}, fn {i, x}, acc ->
-      v = map[{i, x}]
-      Map.update(acc, x, v, fn lst -> lst ++ v end)
-    end)
+    map
   end
 
   defp get_named_args([current | rest], map) do
-    name =
-      case current.name do
-        "" -> current.long
-        _ -> current.name
-      end
-
+    name = long_or_short(current)
     n = current.n
-    prev_args = map[{n, name}]
+    prev_args = map[name] || []
     dup = current.dup
-
-    args =
-      case prev_args do
-        nil ->
-          case current.args do
-            nil -> false
-            _ -> current.args
-          end
-
-        _ ->
-          prev_args ++ (current.args || [])
-      end
 
     cond do
       prev_args && not dup ->
         raise WrongSpecError, message: [switch: current, reason: :duplicate]
 
       true ->
-        get_named_args(rest, Map.put(map, {n, name}, args))
+        args = prev_args ++ (current.args || [])
+        get_named_args(rest, Map.put(map, name, args))
     end
   end
 
