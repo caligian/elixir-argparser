@@ -1,6 +1,7 @@
 defmodule Switch do
   defstruct name: false,
             n: 0,
+            metavar: :string,
             pos: false,
             args: false,
             dup: true,
@@ -28,14 +29,19 @@ defmodule WrongNargsError do
 end
 
 defmodule Argparser do
-  @type argv() :: [String.t()]
+  @doc """
+
+  """
+
+  @type argv() :: [str()]
   @type switch() :: %Switch{}
   @type specs() :: [switch()]
   @type pos_args() :: list(String.t())
-  @type named_args() :: %{String.t() => list(any())}
+  @type named_args() :: %{String.t() => any()}
   @type parsed_args() :: {pos_args(), named_args()}
+  @type str() :: String.t()
 
-  @spec get_stdin() :: [String.t()] | :error
+  @spec get_stdin() :: [str()] | :error
   def get_stdin(sep \\ ~r"[\n\r]") do
     case IO.read(:stdio, :all) do
       {:error, _} -> :error
@@ -49,10 +55,81 @@ defmodule Argparser do
     args
   end
 
-  # TODO
-  defp print_desc(specs) do
+  defp get_desc(short, specs) when is_bitstring(short) do
+    get_desc([short, ""], specs)
   end
 
+  # TODO
+  defp get_desc([short, long], specs) do
+    script_name = String.replace __ENV__.file, System.get_env("HOME"), "~"
+
+    print_metavar = fn type, n, required ->
+      case n do
+        "*" -> "[#{type}, [#{type}, [...]]]"
+        0 -> ""
+        1 when required -> "{#{type}}"
+        y when y == 1 or y == "?" -> "[#{type}]"
+        "+" -> "#{type}, [#{type}, [...]]"
+        _ -> "#{type}, {#{type}, [...]}"
+      end
+    end
+
+    print_switch = fn x ->
+      metavars = print_metavar.(x.metavar, x.n, x.required)
+
+      cond do
+        x.name && x.long ->
+          "-#{x.name} | --#{x.long}: #{metavars}"
+
+        x.name ->
+          "-#{x.name}: #{metavars}"
+
+        x.long ->
+          "--#{x.long}: #{metavars}"
+      end
+    end
+
+    [
+      "#{script_name}: #{short}",
+      case long do
+        "" -> ""
+        _ -> [long, ""]
+      end
+      | Enum.map(specs, fn x ->
+          [
+            print_switch.(x),
+              case x.n do
+                0 -> "Is a flag?: true"
+                _ -> "Requires N: #{x.n}"
+              end,
+            "Required: #{x.required}",
+            "Supports duplicate instances: #{x.dup}",
+            "To be used without: " <>
+              case x.without do
+                [] -> "none"
+                lst -> List.to_string(lst)
+              end,
+            "To be used with: " <>
+              case x.deps do
+                [] -> "none"
+                lst -> List.to_string(lst)
+              end,
+            "Argument type: #{x.type}",
+            "Description:",
+            x.desc,
+            ""
+          ]
+        end)
+    ]
+    |> List.flatten()
+    |> Enum.join("\n")
+  end
+
+  def print_help(long_desc, specs) do
+    IO.puts(get_desc(long_desc, specs))
+  end
+
+  @spec validate_names(switch()) :: nil
   def validate_names(switch) do
     name = switch.name
     long = switch.long
@@ -195,7 +272,7 @@ defmodule Argparser do
     %Switch{switch | args: passed_args}
   end
 
-  @spec long_or_short(switch()) :: String.t()
+  @spec long_or_short(switch()) :: str()
   defp long_or_short(switch) do
     cond do
       switch.name && switch.long ->
@@ -322,6 +399,7 @@ defmodule Argparser do
     end
   end
 
+  @spec get_switch_from_spec([switch()], str()) :: switch() | false
   defp get_switch_from_spec(spec, name) do
     name = (is_atom(name) && Atom.to_string(name)) || name
     name = String.replace(name, "_", "-")
@@ -338,18 +416,25 @@ defmodule Argparser do
       check = switch.check
       type = switch.type
       args = parsed_map[name]
+
       args =
         cond do
           is_list(args) ->
             case type do
               :atom ->
-                Enum.map(args, &(String.to_atom(&1)))
+                Enum.map(args, &String.to_atom(&1))
 
               :float ->
-                Enum.map(args, fn x -> {n, _} =  Float.parse(x); n end)
+                Enum.map(args, fn x ->
+                  {n, _} = Float.parse(x)
+                  n
+                end)
 
               :integer ->
-                Enum.map(args, fn x -> {n, _} =  Integer.parse(x); n end)
+                Enum.map(args, fn x ->
+                  {n, _} = Integer.parse(x)
+                  n
+                end)
 
               :regex ->
                 Enum.map(args, &Regex.compile(&1))
@@ -526,6 +611,7 @@ defmodule Argparser do
     end
   end
 
+  @spec get_default_args([switch()], named_args()) :: named_args()
   def get_default_args(spec, parsed_map) do
     List.foldl(spec, parsed_map, fn x, acc ->
       name = long_or_short(x)
@@ -544,66 +630,99 @@ defmodule Argparser do
     end)
   end
 
-  @spec parse!(specs()) :: parsed_args()
-  def parse!(spec) do
-    parse(spec, System.argv())
+  @spec parse!(str(), specs()) :: parsed_args()
+  def parse!(long_desc, spec) do
+    parse(long_desc, spec, System.argv())
   end
 
-  def parse(_, []) do
+  def extract_till_sep(args) do
+    sep_pos = Enum.find_index(args, fn x -> x == "--" end) || -1
+
+    cond do
+      sep_pos == -1 ->
+        {{}, args}
+
+      sep_pos ->
+        {
+          Enum.slice(args, 0, sep_pos),
+          Enum.slice(args, sep_pos + 1, length(args) - sep_pos)
+        }
+    end
+  end
+
+  def parse(_, _, []) do
     false
   end
 
-  def parse([], args) do
+  def parse(_, [], args) do
     {args, false}
   end
 
-  @spec parse(specs(), argv()) :: parsed_args()
-  def parse(spec, args) do
-    parsed = get_pos(args, spec, [])
-    parsed = extract_args(args, parsed, [])
-    parsed = check_switch_args(args, parsed, %{}, [])
-    parsed_map = get_named_args(parsed, %{})
-    parsed_map = post_process_switches(spec, parsed_map)
-    parsed_map = get_default_args(spec, parsed_map)
-    _ = check_deps(parsed, parsed_map)
-    last_pos = List.last(parsed)
-    first_pos = List.first(parsed)
+  @spec parse(str(), specs(), argv()) :: parsed_args()
+  def parse(long_desc, spec, args) do
+    cond do
+      Enum.find_index(args, fn x -> x == "--help" end) ->
+        print_help(long_desc, spec)
 
-    last_pos =
-      if last_pos do
-        if last_pos.args && length(last_pos.args) > 0 do
-          last_pos.pos + length(last_pos.args) + 1
+      true ->
+        {tail, args} = extract_till_sep(args)
+        parsed = get_pos(args, spec, [])
+        parsed = extract_args(args, parsed, [])
+        parsed = check_switch_args(args, parsed, %{}, [])
+        parsed_map = get_named_args(parsed, %{})
+        parsed_map = post_process_switches(spec, parsed_map)
+        parsed_map = get_default_args(spec, parsed_map)
+        _ = check_deps(parsed, parsed_map)
+        last_pos = List.last(parsed)
+        first_pos = List.first(parsed)
+
+        last_pos =
+          if last_pos do
+            if last_pos.args && length(last_pos.args) > 0 do
+              last_pos.pos + length(last_pos.args) + 1
+            else
+              last_pos.pos + 1
+            end
+          end
+
+        pos_head =
+          if first_pos do
+            Enum.slice(args, 0, first_pos.pos)
+          else
+            []
+          end
+
+        pos_tail =
+          if last_pos do
+            Enum.slice(args, last_pos, length(args) - last_pos)
+          else
+            []
+          end
+
+        parsed_map =
+          if map_size(parsed_map) == 0 do
+            false
+          else
+            List.foldl(Map.keys(parsed_map), %{}, fn x, acc ->
+              out =
+                case parsed_map[x] do
+                  [] -> true
+                  [item] -> item
+                  v -> v
+                end
+
+              Map.put(acc, x, out)
+            end)
+          end
+
+        pos_tail = pos_tail ++ tail
+        pos_args = pos_head ++ pos_tail
+
+        if length(pos_args) > 0 do
+          {pos_args, parsed_map}
         else
-          last_pos.pos + 1
+          {false, parsed_map}
         end
-      end
-
-    pos_head =
-      if first_pos do
-        Enum.slice(args, 0, first_pos.pos)
-      else
-        args
-      end
-
-    pos_tail =
-      if last_pos do
-        Enum.slice(args, last_pos, length(args) - last_pos)
-      else
-        []
-      end
-
-    parsed_map =
-      if map_size(parsed_map) == 0 do
-        false
-      else
-        parsed_map
-      end
-
-    if pos_head == args do
-      {args, parsed_map}
-    else
-      pos_args = pos_head ++ pos_tail
-      {pos_args, parsed_map}
     end
   end
 
@@ -611,11 +730,13 @@ defmodule Argparser do
     args =
       Enum.map(
         [
+          "--help",
           1,
           2,
           3,
           4,
           "-a",
+          1,
           "/home/caligian/.bashrc",
           "-b",
           1,
@@ -636,13 +757,20 @@ defmodule Argparser do
       )
 
     specs = [
-      %Switch{name: "a", long: "long-name", n: "+", type: :contents},
+      %Switch{
+        name: "a",
+        long: "long-name",
+        n: 5,
+        metavar: :path,
+        type: :contents,
+        desc: "Hello world, teri maa ka bhosda"
+      },
       %Switch{name: "b", n: "+", type: :integer},
       %Switch{name: "c", n: "+", type: :float},
       %Switch{name: "d", default: fn -> :hello end}
     ]
 
-    pp(parse(specs, args))
+    parse(["hello world!", "some long description"], specs, args)
   end
 end
 
