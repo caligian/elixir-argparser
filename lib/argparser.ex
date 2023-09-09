@@ -634,12 +634,12 @@ defmodule Argparser do
 
     cond do
       sep_pos == -1 ->
-        {[], args}
+        {args, []}
 
       sep_pos ->
         {
           Enum.slice(args, 0, sep_pos),
-          Enum.slice(args, sep_pos + 1, length(args) - sep_pos)
+          Enum.slice(args, sep_pos + 1..length(args))
         }
     end
   end
