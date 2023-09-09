@@ -1,21 +1,3 @@
-defmodule Switch do
-  defstruct name: false,
-            n: 0,
-            metavar: :string,
-            pos: false,
-            args: false,
-            dup: true,
-            required: false,
-            check: false,
-            post: false,
-            without: [],
-            deps: [],
-            desc: "",
-            long: false,
-            default: false,
-            type: :string
-end
-
 defmodule DepsError do
   defexception [:message]
 end
@@ -34,8 +16,7 @@ defmodule Argparser do
   """
 
   @type argv() :: [str()]
-  @type switch() :: %Switch{}
-  @type specs() :: [switch()]
+  @type specs() :: [map()]
   @type pos_args() :: list(String.t())
   @type named_args() :: %{String.t() => any()}
   @type parsed_args() :: {pos_args(), named_args()}
@@ -49,19 +30,49 @@ defmodule Argparser do
     end
   end
 
-  @spec pp(any()) :: any()
-  defp pp(args) do
-    IO.inspect(args)
-    args
+  # @spec pp(any()) :: any()
+  # defp pp(args) do
+  #   IO.inspect(args)
+  #   args
+  # end
+
+  defp get_default() do
+    %{
+      name: false,
+      n: 0,
+      metavar: :string,
+      pos: false,
+      args: false,
+      dup: true,
+      required: false,
+      check: false,
+      post: false,
+      without: [],
+      deps: [],
+      desc: "",
+      long: false,
+      default: false,
+      type: :string
+    }
+  end
+
+  @spec add_defaults(map()) :: map()
+  defp add_defaults(x) when is_map(x) do
+    Map.keys(x) |> List.foldl(get_default(), &Map.put(&2, &1, x[&1]))
+  end
+
+  @spec add_defaults(list(map())) :: list(map())
+  defp add_defaults(xs) do
+    Enum.map(xs, &add_defaults/1)
   end
 
   defp get_desc(short, specs) when is_bitstring(short) do
-    get_desc([short, ""], specs)
+    get_desc({short, ""}, specs)
   end
 
   # TODO
-  defp get_desc([short, long], specs) do
-    script_name = String.replace __ENV__.file, System.get_env("HOME"), "~"
+  defp get_desc({short, long}, specs) do
+    script_name = String.replace(__ENV__.file, System.get_env("HOME"), "~")
 
     print_metavar = fn type, n, required ->
       case n do
@@ -98,10 +109,10 @@ defmodule Argparser do
       | Enum.map(specs, fn x ->
           [
             print_switch.(x),
-              case x.n do
-                0 -> "Is a flag?: true"
-                _ -> "Requires N: #{x.n}"
-              end,
+            case x.n do
+              0 -> "Is a flag?: true"
+              _ -> "Requires N: #{x.n}"
+            end,
             "Required: #{x.required}",
             "Supports duplicate instances: #{x.dup}",
             "To be used without: " <>
@@ -129,7 +140,7 @@ defmodule Argparser do
     IO.puts(get_desc(long_desc, specs))
   end
 
-  @spec validate_names(switch()) :: nil
+  @spec validate_names(map()) :: nil
   def validate_names(switch) do
     name = switch.name
     long = switch.long
@@ -156,108 +167,69 @@ defmodule Argparser do
     end
   end
 
-  def get_all_pos([], _, pos) do
-    pos
+  defp find_index([], _, _, x, found) do
+    found |> List.flatten() |> Enum.reverse() |> Enum.map(fn pos -> %{x | pos: pos} end)
   end
 
-  @spec get_all_pos(argv(), switch(), list(number())) :: list(switch())
-  def get_all_pos(args, x, pos) do
-    validate_names(x)
+  defp find_index(xs, full_len, offset, x, found) do
+    name = Map.get(x, :name)
+    long = Map.get(x, :long)
+    name_pos = name && Enum.find_index(xs, fn y -> "-" <> name == y end)
+    long_pos = long && Enum.find_index(xs, fn y -> "--" <> long == y end)
 
-    required = x.required
-    nargs = length(args)
-    offset = (length(pos) > 0 and List.last(pos) + 1) || 0
-
-    cond do
-      x.name && x.long ->
-        m = Enum.find_index(args, &(&1 == "-" <> x.name))
-        n = Enum.find_index(args, &(&1 == "--" <> x.long))
-
-        cond do
-          m && n ->
-            args
-            |> Enum.slice(((m > n && m) || n) + 1, nargs)
-            |> get_all_pos(x, Enum.sort([offset + m, offset + n] ++ pos))
-
-          m ->
-            args
-            |> Enum.slice(m + 1, nargs)
-            |> get_all_pos(x, Enum.sort([offset + m | pos]))
-
-          n ->
-            args
-            |> Enum.slice(n + 1, nargs)
-            |> get_all_pos(x, Enum.sort([offset + n | pos]))
-
-          required ->
-            raise WrongSpecError, message: "#{long_or_short(x)}: required but not passed"
-
-          true ->
-            pos
-        end
-
-      x.name ->
-        case Enum.find_index(args, &(&1 == "-" <> x.name)) do
-          n when is_number(n) ->
-            args
-            |> Enum.slice(n + 1, nargs)
-            |> get_all_pos(x, [offset + n | pos])
-
-          _required when required ->
-            raise WrongSpecError,
-              message: " #{long_or_short(x)} switch is required but not passed"
-
-          _ ->
-            pos
-        end
-
-      x.long ->
-        case Enum.find_index(args, &(&1 == "--" <> x.long)) do
-          n when is_number(n) ->
-            args
-            |> Enum.slice(n + 1, nargs)
-            |> get_all_pos(x, [offset + n | pos])
-
-          _required when required ->
-            raise WrongSpecError, message: "#{long_or_short(x)} switch is required but not passed"
-
-          _ ->
-            pos
-        end
-
-      true ->
-        pos
-    end
-  end
-
-  defp get_pos(_args, [], parsed) do
-    Enum.sort_by(parsed, fn x -> x.pos end)
-  end
-
-  @spec get_pos(argv(), [switch()], [switch()]) :: [switch()]
-  defp get_pos(args, [current | rest_switches], parsed) do
-    pos = get_all_pos(args, current, [])
+    pos =
+      cond do
+        name_pos && long_pos -> [name_pos, long_pos]
+        name_pos -> [name_pos]
+        long_pos -> [long_pos]
+        true -> false
+      end
 
     case pos do
-      [] ->
-        get_pos(args, rest_switches, parsed)
+      false ->
+        find_index([], full_len, offset, x, found)
 
       _ ->
-        parsed =
-          List.foldl(pos, parsed, fn x, acc ->
-            [%Switch{current | pos: x} | acc]
-          end)
+        pos = Enum.sort(pos)
+        len = length(xs)
+        pos_len = length(pos)
+        last = List.last(pos)
+        offset = full_len - len
+        put_pos = offset + last
 
-        get_pos(args, rest_switches, parsed)
+        cond do
+          pos_len == 0 ->
+            find_index([], full_len, offset, x, found)
+
+          pos_len == len - 1 ->
+            find_index([], full_len, offset, x, [put_pos | found])
+
+          true ->
+            check = List.last(pos)
+            remaining = Enum.slice(xs, check + 1, len - (check + 1))
+            find_index(remaining, full_len, len, x, [put_pos | found])
+        end
     end
   end
 
-  @spec parse_switch_args(argv(), switch(), number()) :: switch()
-  defp parse_switch_args(args, switch, next_switch) when is_number(next_switch) do
-    %Switch{switch | args: Enum.slice(args, switch.pos + 1, length(args) - (switch.pos + 1))}
+  def find_index(args, xs) do
+    xs
+    |> Enum.map(fn x -> find_index(args, length(args), 0, x, []) end)
+    |> Enum.filter(& &1)
+    |> List.flatten()
+    |> Enum.sort_by(& &1.pos)
   end
 
-  @spec parse_switch_args(argv(), switch(), switch()) :: switch()
+  @spec parse_switch_args(argv(), map(), number()) :: map()
+  defp parse_switch_args(args, switch, next_switch) when is_number(next_switch) do
+    args_len = length(args)
+    args_left = args_len - (switch.pos + 1)
+    remaining_args = Enum.slice(args, switch.pos + 1, args_left)
+
+    %{switch | args: remaining_args}
+  end
+
+  @spec parse_switch_args(argv(), map(), map()) :: map()
   defp parse_switch_args(args, switch, next_switch) do
     next_switch_pos = next_switch.pos
     pos = switch.pos
@@ -269,10 +241,10 @@ defmodule Argparser do
         true -> Enum.slice(args, pos + 1, passed_nargs)
       end
 
-    %Switch{switch | args: passed_args}
+    %{switch | args: passed_args}
   end
 
-  @spec long_or_short(switch()) :: str()
+  @spec long_or_short(map()) :: str()
   defp long_or_short(switch) do
     cond do
       switch.name && switch.long ->
@@ -287,76 +259,87 @@ defmodule Argparser do
   end
 
   defp check_switch_args(_args, [], _lookup, parsed) do
-    Enum.reverse(parsed)
+    {last, args_tail} = hd(parsed)
+    {Enum.reverse([last | tl(parsed)]), args_tail}
   end
 
   defp check_switch_args(args, [x], lookup, parsed) do
-    is_zero_or_one = x.n == "?"
+    n = x.n
+    pos = x.pos
+    name = long_or_short(x)
+    prev_nargs = lookup[name] || 0
+    current_args = x.args || []
+    current_nargs = length(current_args)
+    total_nargs = prev_nargs + current_nargs
+    args_len = length(args)
+    remaining = args_len - (pos + 1)
 
-    case x.n do
-      n when is_number(n) or is_zero_or_one or n == "+" ->
-        prev_nargs = lookup[long_or_short(x)] || 0
-        current_args = x.args || []
-        current_nargs = length(current_args)
-        total_nargs = prev_nargs + current_nargs
+    remaining_args =
+      case remaining do
+        0 -> []
+        _ -> Enum.slice(args, pos + 1, remaining)
+      end
 
-        cond do
-          n == "+" ->
-            if total_nargs < 1 do
+    res =
+      cond do
+        n == "+" ->
+          if total_nargs < 1 do
+            raise WrongNargsError,
+              message: "#{name}: expected more than equal to 1 arg[s], got #{total_nargs}"
+          else
+            remaining_args
+          end
+
+        n == "*" ->
+          remaining_args
+
+        n == "?" ->
+          (remaining > 0 && hd(remaining_args)) || []
+
+        is_number(n) ->
+          cond do
+            prev_nargs == n ->
+              []
+
+            total_nargs == n ->
+              remaining_args
+
+            n < prev_nargs ->
               raise WrongNargsError,
                 message:
-                  "#{long_or_short(x)} expected more than equal to 1 arg[s], got #{total_nargs}"
-            else
-              check_switch_args(args, [], lookup, [x | parsed])
-            end
+                  "#{name}: too many arguments. required #{n}, got #{current_nargs + prev_nargs}"
 
-          is_zero_or_one ->
-            cond do
-              prev_nargs > 0 and current_nargs > 0 ->
-                if total_nargs > 1 do
-                  raise WrongNargsError,
-                    message: "#{long_or_short(x)} 0 or 1 required, got #{total_nargs}"
-                else
-                  check_switch_args(args, [], lookup, [
-                    %Switch{x | args: [List.first(current_args)]} | parsed
-                  ])
-                end
+            n < current_nargs ->
+              Enum.slice(current_args, 0, n)
 
-              prev_nargs > 1 or current_nargs > 1 ->
-                raise WrongNargsError,
-                  message: "#{long_or_short(x)} 0 or 1 required, got #{total_nargs}"
+            true ->
+              []
+          end
 
-              true ->
-                check_switch_args(args, [], lookup, [
-                  %Switch{x | args: [List.first(current_args)]} | parsed
-                ])
-            end
+        true ->
+          raise WrongSpecError, message: "#{name}: need any of [0-9]+ or [+*?], got #{n}"
+      end
 
-          prev_nargs == x.n ->
-            check_switch_args(args, [], lookup, [%Switch{x | args: []} | parsed])
+    res = to_list(res)
+    res_len = length(res) + prev_nargs
 
-          total_nargs == x.n ->
-            check_switch_args(args, [], lookup, [x | parsed])
-
-          prev_nargs > x.n ->
-            raise WrongNargsError,
-              message: "#{long_or_short(x)}: required #{x.n}, got #{total_nargs}"
-
-          total_nargs > x.n ->
-            check_switch_args(args, [], lookup, [
-              %Switch{x | args: Enum.slice(current_args, 0, abs(x.n - current_nargs))} | parsed
-            ])
-
-          true ->
-            check_switch_args(args, [], lookup, [x | parsed])
-        end
-
-      _ ->
-        check_switch_args(args, [], lookup, [x | parsed])
+    if is_number(n) and res_len != n do
+      raise WrongNargsError, message: "#{name}: too few arguments. required #{n}, got #{res_len}"
     end
+
+    args_tail =
+      case length(res) do
+        0 -> remaining_args
+        n when n == remaining -> []
+        n -> Enum.slice(remaining_args, n, remaining - n)
+      end
+
+    x = {%{x | args: res}, args_tail}
+
+    check_switch_args(args, [], lookup, [x | parsed])
   end
 
-  @spec check_switch_args(argv(), [switch()], map(), list(switch())) :: list(switch())
+  @spec check_switch_args(argv(), [map()], map(), list(map())) :: list(map())
   defp check_switch_args(args, [switch | rest], lookup, parsed) do
     cond do
       switch.n == "*" ->
@@ -399,7 +382,7 @@ defmodule Argparser do
     end
   end
 
-  @spec get_switch_from_spec([switch()], str()) :: switch() | false
+  @spec get_switch_from_spec([map()], str()) :: map() | false
   defp get_switch_from_spec(spec, name) do
     name = (is_atom(name) && Atom.to_string(name)) || name
     name = String.replace(name, "_", "-")
@@ -408,7 +391,7 @@ defmodule Argparser do
     Enum.at(switch, 0) || false
   end
 
-  @spec post_process_switches(specs(), named_args()) :: list(switch())
+  @spec post_process_switches(specs(), named_args()) :: list(map())
   defp post_process_switches(spec, parsed_map) do
     List.foldl(Map.keys(parsed_map), parsed_map, fn switch, acc ->
       name = switch
@@ -416,6 +399,7 @@ defmodule Argparser do
       check = switch.check
       type = switch.type
       args = parsed_map[name]
+      len = length(args)
 
       args =
         cond do
@@ -430,14 +414,14 @@ defmodule Argparser do
                   n
                 end)
 
-              :integer ->
+              _ when type ==  :integer or type == :int ->
                 Enum.map(args, fn x ->
                   {n, _} = Integer.parse(x)
                   n
                 end)
 
               :regex ->
-                Enum.map(args, &Regex.compile(&1))
+                Enum.map(args, &Regex.compile!(&1))
 
               :file ->
                 Enum.each(args, fn x ->
@@ -450,7 +434,7 @@ defmodule Argparser do
               :dir ->
                 Enum.each(args, fn x ->
                   case File.dir?(x) do
-                    false -> throw({:invalid_dir_path, x})
+                    false -> throw({:invalid_file_path, x})
                     true -> x
                   end
                 end)
@@ -467,50 +451,48 @@ defmodule Argparser do
                   end
                 end)
 
+              :string -> args
+              :str -> args
+
               _ ->
-                args
+                raise "#{name}: invalid type: #{type}"
             end
 
           true ->
             args
         end
 
-      post =
-        switch.post &&
-          fn x ->
-            try do
-              switch.post.(x)
-            rescue
-              _ in ArgumentError ->
-                raise WrongSpecError,
-                  message: "#{long_or_short(switch)}: switch failed post processing"
-            else
-              out -> out
+      args =
+        if switch.post do
+          Enum.map(to_list(args), switch.post)
+
+          res =
+            case type do
+              0 -> true
+              1 -> hd(args)
+              "?" when len > 0 -> hd(args)
+              "?" when len == 0 -> true
+              "*" when len == 0 -> true
+              _ -> args
             end
-          end
 
-      cond do
-        check && post ->
-          out = post.(args)
+          res
+        else
+          args
+        end
 
-          if not check.(out) do
+      if check do
+        correct? = Enum.all?(Enum.map(to_list(args), check))
+
+        cond do
+          not correct? ->
             raise WrongSpecError, message: "#{name}: switch failed validation"
-          else
-            Map.put(acc, name, out)
-          end
 
-        check ->
-          if not check.(args) do
-            raise WrongSpecError, message: "#{name}: switch failed validation"
-          else
+          true ->
             Map.put(acc, name, args)
-          end
-
-        post ->
-          Map.put(acc, name, post.(args))
-
-        true ->
-          Map.put(acc, name, args)
+        end
+      else
+        Map.put(acc, name, args)
       end
     end)
   end
@@ -524,7 +506,7 @@ defmodule Argparser do
     Enum.reverse([with_args | parsed])
   end
 
-  @spec extract_args(argv(), [switch()], [switch()]) :: [switch()]
+  @spec extract_args(argv(), [map()], [map()]) :: [map()]
   defp extract_args(args, [current | rest], parsed) do
     with_args = parse_switch_args(args, current, hd(rest))
     extract_args(args, rest, [with_args | parsed])
@@ -537,7 +519,7 @@ defmodule Argparser do
     end)
   end
 
-  @spec get_named_args([switch()], named_args()) :: named_args()
+  @spec get_named_args([map()], named_args()) :: named_args()
   defp get_named_args([current | rest], map) do
     name = long_or_short(current)
     prev_args = map[name] || []
@@ -551,13 +533,6 @@ defmodule Argparser do
         args = prev_args ++ (current.args || [])
         get_named_args(rest, Map.put(map, name, args))
     end
-  end
-
-  defp check_deps([], map) do
-    List.foldl(Map.keys(map), %{}, fn x, acc ->
-      v = (length(map[x]) > 0 and map[x]) || true
-      Map.put(acc, x, v)
-    end)
   end
 
   defp check_deps(specs, map) do
@@ -574,9 +549,27 @@ defmodule Argparser do
               true
 
             d ->
-              case Enum.filter(d, fn y -> get_switch_from_spec(specs, y) end) do
-                [] -> raise WrongSpecError, message: "#{x}: missing deps: #{d}"
-                _ -> true
+              found =
+                Enum.filter(d, fn x ->
+                  case x do
+                    y when is_list(y) ->
+                      res = Enum.filter(y, fn z -> get_switch_from_spec(specs, z) end)
+
+                      if length(res) != length(y) do
+                        raise WrongSpecError, message: "#{x}: missing deps: #{y}"
+                      else
+                        true
+                      end
+
+                    y ->
+                      get_switch_from_spec(specs, y)
+                  end
+                end)
+
+              if length(found) == 0 do
+                raise WrongSpecError, message: "#{x}: missing deps. need any of: #{switch.deps}"
+              else
+                true
               end
           end
 
@@ -611,16 +604,17 @@ defmodule Argparser do
     end
   end
 
-  @spec get_default_args([switch()], named_args()) :: named_args()
+  @spec get_default_args([map()], named_args()) :: named_args()
   def get_default_args(spec, parsed_map) do
     List.foldl(spec, parsed_map, fn x, acc ->
       name = long_or_short(x)
+      name = String.replace(name, ~r"-", "_") |> String.to_atom()
 
       cond do
         x.default && not Map.has_key?(parsed_map, name) ->
           Map.put(
             acc,
-            String.replace(name, "_", "-") |> String.to_atom(),
+            name,
             x.default.() |> to_list
           )
 
@@ -630,7 +624,7 @@ defmodule Argparser do
     end)
   end
 
-  @spec parse!(str(), specs()) :: parsed_args()
+  @spec parse!({str(), str()}, specs()) :: parsed_args()
   def parse!(long_desc, spec) do
     parse(long_desc, spec, System.argv())
   end
@@ -640,7 +634,7 @@ defmodule Argparser do
 
     cond do
       sep_pos == -1 ->
-        {{}, args}
+        {[], args}
 
       sep_pos ->
         {
@@ -651,50 +645,39 @@ defmodule Argparser do
   end
 
   def parse(_, _, []) do
-    false
+    {:error, :no_args}
   end
 
-  def parse(_, [], args) do
-    {args, false}
+  def parse(_, [], _) do
+    {:error, :no_specs}
   end
 
-  @spec parse(str(), specs(), argv()) :: parsed_args()
+  @spec parse({str(), str()}, specs(), argv()) ::
+          parsed_args()
+          | {:error, :no_args}
+          | {:error, :no_specs}
+
   def parse(long_desc, spec, args) do
+    spec = add_defaults(spec)
+
     cond do
       Enum.find_index(args, fn x -> x == "--help" end) ->
         print_help(long_desc, spec)
 
       true ->
-        {tail, args} = extract_till_sep(args)
-        parsed = get_pos(args, spec, [])
+        {args, tail} = extract_till_sep(args)
+        parsed = find_index(args, spec)
         parsed = extract_args(args, parsed, [])
-        parsed = check_switch_args(args, parsed, %{}, [])
+        {parsed, tail1} = check_switch_args(args, parsed, %{}, [])
         parsed_map = get_named_args(parsed, %{})
         parsed_map = post_process_switches(spec, parsed_map)
         parsed_map = get_default_args(spec, parsed_map)
         _ = check_deps(parsed, parsed_map)
-        last_pos = List.last(parsed)
         first_pos = List.first(parsed)
-
-        last_pos =
-          if last_pos do
-            if last_pos.args && length(last_pos.args) > 0 do
-              last_pos.pos + length(last_pos.args) + 1
-            else
-              last_pos.pos + 1
-            end
-          end
 
         pos_head =
           if first_pos do
             Enum.slice(args, 0, first_pos.pos)
-          else
-            []
-          end
-
-        pos_tail =
-          if last_pos do
-            Enum.slice(args, last_pos, length(args) - last_pos)
           else
             []
           end
@@ -706,22 +689,33 @@ defmodule Argparser do
             List.foldl(Map.keys(parsed_map), %{}, fn x, acc ->
               out =
                 case parsed_map[x] do
-                  [] -> true
-                  [item] -> item
-                  v -> v
+                  [] ->
+                    switch = get_switch_from_spec(spec, x)
+
+                    if switch.n == 0 do
+                      true
+                    else
+                      []
+                    end
+
+                  [item] ->
+                    item
+
+                  v ->
+                    v
                 end
 
               Map.put(acc, x, out)
             end)
           end
 
-        pos_tail = pos_tail ++ tail
+        pos_tail = tail ++ tail1
         pos_args = pos_head ++ pos_tail
 
         if length(pos_args) > 0 do
-          {pos_args, parsed_map}
+          {:ok, {pos_args, parsed_map}}
         else
-          {false, parsed_map}
+          {:ok, {[], parsed_map}}
         end
     end
   end
@@ -730,13 +724,11 @@ defmodule Argparser do
     args =
       Enum.map(
         [
-          "--help",
           1,
           2,
           3,
           4,
           "-a",
-          1,
           "/home/caligian/.bashrc",
           "-b",
           1,
@@ -745,11 +737,18 @@ defmodule Argparser do
           4,
           "-b",
           6,
+          "-c",
           7,
           8,
-          -11,
           "-c",
-          1
+          1,
+          2,
+          "-c",
+          "1",
+          "2",
+          "3",
+          "4",
+          "5"
         ],
         fn x ->
           (is_integer(x) && Integer.to_string(x)) || x
@@ -757,7 +756,7 @@ defmodule Argparser do
       )
 
     specs = [
-      %Switch{
+      %{
         name: "a",
         long: "long-name",
         n: 5,
@@ -765,15 +764,13 @@ defmodule Argparser do
         type: :contents,
         desc: "Hello world, teri maa ka bhosda"
       },
-      %Switch{name: "b", n: "+", type: :integer},
-      %Switch{name: "c", n: "+", type: :float},
-      %Switch{name: "d", default: fn -> :hello end}
+      %{name: "b", n: 4, type: :integer},
+      %{name: "c", n: 6, type: :float},
+      %{name: "d", default: fn -> :hello end}
     ]
 
-    parse(["hello world!", "some long description"], specs, args)
+    parse({"hello world!", "some long description"}, specs, args)
   end
 end
-
-Argparser.test()
 
 
