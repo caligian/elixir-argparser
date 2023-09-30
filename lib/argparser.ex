@@ -53,7 +53,6 @@ defmodule Argparser do
   Rest of the keys are self-explanatory.
   """
 
-  @typedoc "Parse arguments from a list of switch maps"
   @type switch() :: %{
           name: str(),
           long: str(),
@@ -573,7 +572,7 @@ defmodule Argparser do
     end
   end
 
-  @spec extract_till_sep(args()) :: tuple(list(str()), list(str()))
+  @spec extract_till_sep(argv()) :: {list(str()), list(str())}
   def extract_till_sep(args) do
     sep_pos = Enum.find_index(args, fn x -> x == "--" end) || -1
 
@@ -649,5 +648,3 @@ defmodule Argparser do
     parse(desc, spec, System.argv())
   end
 end
-
-
