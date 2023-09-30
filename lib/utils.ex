@@ -29,7 +29,7 @@ defmodule Argparser.Utils do
       desc: "",
       long: false,
       default: false,
-      type: :string
+      type: :string,
     }
   end
 end

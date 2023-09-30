@@ -1,21 +1,26 @@
-defmodule Argparser.DepsError do
-  defexception [:message]
-  alias Argparser.DepsError, as: DepsError
-end
-
 defmodule Argparser.WrongSpecError do
+  @moduledoc """
+  Raised when
+  - required switch is not passed
+  - unallowed characters in switch names
+  - post/1 raises an exception while processing parsed args
+  - unneeded switches defined in 'without' passed
+  - deps of switch are missing
+  """
+
   defexception [:message]
-  alias Argparser.WrongSpecError, as: WrongSpecError
 end
 
 defmodule Argparser.WrongNargsError do
+  @moduledoc """
+  Raised when wrong number of arguments are provided for a switch
+  """
+
   defexception [:message]
-  alias Argparser.WrongNargsError, as: WrongNargsError
 end
 
 defmodule Argparser do
   alias Argparser.Help
-  alias Argparser.DepsError
   alias Argparser.WrongSpecError
   alias Argparser.WrongNargsError
   import Argparser.Utils
@@ -27,7 +32,7 @@ defmodule Argparser do
   @moduledoc since: "1.0.0"
 
   @typedoc """
-  Map representing a `switch()`. Everything is optional except any one of name or long (or both) must be passed.
+  Map representing a commandline option. Everything is optional except any one of name or long (or both) must be passed.
 
   You can specify number of arguments. This can be either * (greedy-zero-or-mode), + (greedy-one-or-more), ? (zero-or-one) or any integer specifying the number of arguments required. When you use a greedy specifier, it will regard any positional arguments after switches as being extra arguments. Therefore, avoid placing any positional arguments after greedy matchers.
 
@@ -48,7 +53,7 @@ defmodule Argparser do
   Rest of the keys are self-explanatory.
   """
 
-  @doc "Parse arguments from a list of switch maps"
+  @typedoc "Parse arguments from a list of switch maps"
   @type switch() :: %{
           name: str(),
           long: str(),
@@ -73,7 +78,6 @@ defmodule Argparser do
             | :file
             | :str
             | :string
-            | function()
         }
 
   @type argv() :: [str()]
@@ -92,19 +96,14 @@ defmodule Argparser do
     end
   end
 
-  # @spec pp(any()) :: any()
-  # defp pp(args) do
-  #   IO.inspect(args)
-  #   args
-  # end
-
+  @spec read_file(path :: str()) :: list(str()) | :error
   defp read_file(fname) do
     File.stream!(fname)
     |> Enum.chunk_every(2)
     |> List.flatten()
   end
 
-  @spec validate_names(switch()) :: :ok
+  @spec validate_names(switch()) :: :ok | WrongSpecError
   def validate_names(switch) do
     name = switch.name
     long = switch.long
@@ -140,6 +139,7 @@ defmodule Argparser do
     |> Enum.map(&Map.put(x, :pos, &1))
   end
 
+  @spec find_index(argv(), integer(), integer(), switch(), list()) :: switch() | WrongSpecError
   defp find_index(xs, full_len, offset, x, found) do
     name = Map.get(x, :name)
     long = Map.get(x, :long)
@@ -155,6 +155,9 @@ defmodule Argparser do
       end
 
     case pos do
+      false when x.required ->
+        raise WrongSpecError, message: "#{name}: must be passed"
+
       false ->
         find_index([], full_len, offset, x, found)
 
@@ -269,7 +272,7 @@ defmodule Argparser do
         n == "+" ->
           if total_nargs < 1 do
             raise WrongNargsError,
-              message: "#{name}: expected more than equal to 1 arg[s], got #{total_nargs}"
+              message: "#{name}: expected +, got #{total_nargs}"
           else
             remaining_args
           end
@@ -294,8 +297,7 @@ defmodule Argparser do
 
             n < prev_nargs ->
               raise WrongNargsError,
-                message:
-                  "#{name}: required #{n}, got #{current_nargs + prev_nargs}"
+                message: "#{name}: required #{n}, got #{current_nargs + prev_nargs}"
 
             true ->
               req = n - prev_nargs
@@ -328,7 +330,8 @@ defmodule Argparser do
     check_switch_args(args, [], lookup, [x | parsed])
   end
 
-  @spec check_switch_args(argv(), [switch()], switch(), [switch()]) :: [switch()]
+  @spec check_switch_args(argv(), [switch()], switch(), [switch()]) ::
+          [switch()] | WrongSpecError | WrongNargsError
   defp check_switch_args(args, [switch | rest], lookup, parsed) do
     name = long_or_short(switch)
     passed = switch.args || []
@@ -348,7 +351,7 @@ defmodule Argparser do
     Enum.at(switch, 0) || false
   end
 
-  @spec post_process_switches(named_args()) :: [switch()]
+  @spec post_process_switches(named_args()) :: [switch()] | WrongSpecError
   defp post_process_switches(parsed_map) do
     List.foldl(Map.keys(parsed_map), parsed_map, fn name, acc ->
       switch = parsed_map[name]
@@ -382,7 +385,7 @@ defmodule Argparser do
               :file ->
                 Enum.each(args, fn x ->
                   case File.exists?(x) do
-                    false -> throw({:invalid_file_path, x})
+                    false -> raise WrongSpecError, message: "#{name}: invalid file path: #{x}"
                     true -> x
                   end
                 end)
@@ -390,8 +393,11 @@ defmodule Argparser do
               :dir ->
                 Enum.each(args, fn x ->
                   case File.dir?(x) do
-                    false -> throw({:invalid_file_path, x})
-                    true -> x
+                    false ->
+                      raise WrongSpecError, message: "#{name}: invalid directory path: #{x}"
+
+                    true ->
+                      x
                   end
                 end)
 
@@ -399,7 +405,7 @@ defmodule Argparser do
                 Enum.map(args, fn x ->
                   case File.exists?(x) do
                     false ->
-                      throw({:invalid_dir_path, x})
+                      raise WrongSpecError, message: "#{name}: invalid file path: #{x}"
 
                     true ->
                       out = read_file(x)
@@ -414,7 +420,7 @@ defmodule Argparser do
                 args
 
               _ ->
-                raise "#{name}: invalid type: #{type}"
+                raise WrongSpecError, "#{name}: invalid type spec: #{type}"
             end
 
           true ->
@@ -501,6 +507,7 @@ defmodule Argparser do
     end
   end
 
+  @spec check_deps(specs(), named_args()) :: nil | WrongSpecError
   defp check_deps(specs, map) do
     List.foldl(Map.keys(map), %{}, fn name, _ ->
       x = map[name]
@@ -566,6 +573,7 @@ defmodule Argparser do
     end
   end
 
+  @spec extract_till_sep(args()) :: tuple(list(str()), list(str()))
   def extract_till_sep(args) do
     sep_pos = Enum.find_index(args, fn x -> x == "--" end) || -1
 
@@ -589,11 +597,16 @@ defmodule Argparser do
     raise WrongSpecError, message: "no specs provided"
   end
 
-  @spec parse({str(), str()}, specs(), argv()) :: parsed_args() | WrongSpecError
+  @spec parse({str(), str()}, specs(), argv()) ::
+          parsed_args()
+          | WrongSpecError
+          | WrongNargsError
+          | {:error, :no_args}
+          | {:error, :no_specs}
   def parse(desc, spec, args) do
     cond do
       Enum.find_index(args, fn x -> x == "--help" or x == "-h" end) ->
-        Argparser.Help.help(desc, spec)
+        Help.help(desc, spec)
 
       true ->
         spec = add_defaults(spec)
@@ -613,36 +626,7 @@ defmodule Argparser do
             []
           end
 
-        parsed_map =
-          if map_size(parsed_map) == 0 do
-            false
-          else
-            List.foldl(Map.keys(parsed_map), %{}, fn x, acc ->
-              switch = parsed_map[x]
-              args = switch.args
-              n = switch.n
-
-              out =
-                case args do
-                  [] ->
-                    if n == 0 do
-                      true
-                    else
-                      []
-                    end
-
-                  [item] ->
-                    item
-
-                  v ->
-                    v
-                end
-
-              x = String.replace(x, ~r"-", "_") |> String.to_atom()
-              Map.put(acc, x, out)
-            end)
-          end
-
+        parsed_map = (map_size(parsed_map) > 0 && parsed_map) || false
         pos_tail = tail ++ tail1
         pos_args = pos_head ++ pos_tail
 
@@ -656,6 +640,8 @@ defmodule Argparser do
 
   @spec parse!({str(), str()}, specs()) ::
           parsed_args()
+          | WrongSpecError
+          | WrongNargsError
           | {:error, :no_args}
           | {:error, :no_specs}
 
@@ -663,3 +649,5 @@ defmodule Argparser do
     parse(desc, spec, System.argv())
   end
 end
+
+

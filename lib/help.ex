@@ -1,5 +1,4 @@
 defmodule Argparser.Help do
-  alias Argparser.Help, as: Help
   import Argparser.Utils
 
   defp get_term_width() do
