@@ -1,24 +1,22 @@
 defmodule Argparser.Help do
   alias Argparser.Help, as: Help
+  import Argparser.Utils
 
-  def get_term_width() do
+  defp get_term_width() do
     case :io.columns() do
-      {:ok, cols} ->  cols
+      {:ok, cols} -> cols
       _ -> 30
     end
   end
 
-  def create_body([], parsed) do
-    parsed = 
-      parsed
-      |> Enum.reverse()
-      |> Enum.map(fn x -> Enum.join(x, "") end)
-      |> Enum.join("\n\n")
-
-    IO.write parsed
+  defp create_body([], parsed) do
+    parsed
+    |> Enum.reverse()
+    |> Enum.map(fn x -> Enum.join(x, "") end)
+    |> Enum.join("\n\n")
   end
 
-  def create_body([spec | rest], parsed) do
+  defp create_body([spec | rest], parsed) do
     max_width = Integer.floor_div(get_term_width(), 2)
     {name, name_size, desc} = spec
 
@@ -52,7 +50,7 @@ defmodule Argparser.Help do
                 [{max_width - word_size - 1, [name, strtimes.(" ", remaining), word, " "]}]
             end
 
-          _  ->
+          _ ->
             {remaining, _} = List.last(acc)
 
             case remaining < word_size + 1 do
@@ -71,12 +69,37 @@ defmodule Argparser.Help do
         end
       end)
 
-    text = Enum.map(text, fn {_, x} -> x end) |> List.flatten
+    text = Enum.map(text, fn {_, x} -> x end) |> List.flatten()
     create_body(rest, [text | parsed])
-
   end
 
-  def switch_to_string(spec) do
+  defp create_body(specs) do
+    top_desc =
+      specs
+      |> Enum.map(fn x ->
+        name = x[:name]
+        long = x[:long]
+        n = x[:n]
+        metavar = x[:metavar] || name || long
+        metavar = String.upcase metavar
+
+        cond do
+          name && n == 0 -> "[-#{name}]"
+          long && n == 0 -> "[--#{long}]"
+          name -> "[-#{name} #{metavar}]"
+          long -> "[--#{long} #{metavar}]"
+        end
+      end)
+      |> Enum.join(", ")
+
+    body = create_body(Enum.map(specs, &switch_to_string/1), [])
+
+    fn {header, footer} ->
+      "#{Path.basename __ENV__.file}: #{top_desc}\n\n#{header}\n\n#{body}\n\n#{footer}\n"
+    end
+  end
+
+  defp switch_to_string(spec) do
     desc = spec.desc
     metavar = spec.metavar || Atom.to_string(spec.type)
     n = spec.n
@@ -89,9 +112,9 @@ defmodule Argparser.Help do
         false -> "[#{metavar}]"
       end
 
-    metavar = 
+    metavar =
       cond do
-        is_bitstring(n) -> 
+        is_bitstring(n) ->
           "#{metavar}#{n}"
 
         true ->
@@ -107,10 +130,10 @@ defmodule Argparser.Help do
             "-#{spec.name} #{metavar}, --#{spec.long} #{metavar}"
           end
 
-        spec.name and is_flag ->
+        spec.name && is_flag ->
           "-#{spec.name}"
 
-        spec.long and is_flag ->
+        spec.long && is_flag ->
           "--#{spec.long}"
 
         spec.name ->
@@ -122,19 +145,9 @@ defmodule Argparser.Help do
 
     {name, String.length(name), desc}
   end
+
+  def help(descs, specs) do
+    specs = add_defaults(specs)
+    create_body(specs).(descs)
+  end
 end
-
-switch = %{
-  n: 9,
-  required: false,
-  metavar: :string,
-  name: "a",
-  long: "a-test",
-  desc: "madarchod ke bacche bhosdike. Teri maa ka bhosda. Laude ke baal gandu maa ki chut teri"
-}
-
-switches = [switch, switch]
-switches = Enum.map(switches, &Argparser.Help.switch_to_string/1)
-Argparser.Help.create_body(switches, [])
-
-
